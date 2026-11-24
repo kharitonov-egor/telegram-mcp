@@ -26,6 +26,7 @@ from telegram_mcp.singleton import (
     SessionLockError,
     session_identity,
 )
+from telegram_mcp.transport.auth import auth_token, wrap_with_auth
 import telegram_mcp.tools  # noqa: F401 - registers MCP tools via decorators
 
 # Populated as each account's session lock is acquired; released in _main's
@@ -178,6 +179,33 @@ def _configure_transport_security() -> None:
     )
 
 
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def _warn_if_exposed_without_auth(host: str) -> None:
+    if host not in _LOOPBACK_HOSTS and not auth_token():
+        print(
+            f"WARNING: MCP_HOST={host} accepts connections from other machines and "
+            "MCP_AUTH_TOKEN is unset, so anyone who can reach the port can use this "
+            "Telegram account. Set MCP_AUTH_TOKEN or bind to 127.0.0.1.",
+            file=sys.stderr,
+        )
+
+
+async def _serve_with_auth(transport: str) -> None:
+    """Run FastMCP's HTTP or SSE app behind the MCP_AUTH_TOKEN bearer check."""
+    import uvicorn
+
+    app = mcp.streamable_http_app() if transport == "http" else mcp.sse_app()
+    config = uvicorn.Config(
+        wrap_with_auth(app),
+        host=mcp.settings.host,
+        port=mcp.settings.port,
+        log_level=mcp.settings.log_level.lower(),
+    )
+    await uvicorn.Server(config).serve()
+
+
 async def _serve(transport: str) -> None:
     """Run the MCP server on the selected transport.
 
@@ -192,7 +220,10 @@ async def _serve(transport: str) -> None:
         mcp.settings.host = os.getenv("MCP_HOST", "127.0.0.1")
         mcp.settings.port = int(os.getenv("MCP_PORT", "8765"))
         _configure_transport_security()
-        if transport == "http":
+        _warn_if_exposed_without_auth(mcp.settings.host)
+        if auth_token():
+            await _serve_with_auth(transport)
+        elif transport == "http":
             await mcp.run_streamable_http_async()
         else:
             await mcp.run_sse_async()

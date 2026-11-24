@@ -201,3 +201,17 @@ sticker.webp
 two.png
 aliases.json
 incoming_feed.jsonl
+
+# Local secrets, runtime state and caches
+.env.*
+!.env.example
+data/
+transcripts/
+*.db
+*.sqlite
+*.sqlite3
+.ocr_cache/
+ocr_cache/
+.media_cache/
+media_cache/
+*.bak

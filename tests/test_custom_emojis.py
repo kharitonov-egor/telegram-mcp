@@ -287,6 +287,10 @@ async def test_discovered_emoji_can_be_reused_by_existing_html_path(
                 documents=[],
             ),
         )
+    if tool is messages.edit_message:
+        own = _message()
+        own.out = True
+        client.get_messages.return_value = own
     emoji = messages.get_custom_emoji_metadata(msg)["custom_emojis"][0]
     markup = f'New <tg-emoji emoji-id="{emoji["id"]}">{escape(emoji["emoji"])}</tg-emoji>'
     result = await tool(

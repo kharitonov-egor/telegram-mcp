@@ -81,6 +81,9 @@ class _EditRecorder:
     def __init__(self):
         self.calls = []
 
+    async def get_messages(self, entity, ids):
+        return SimpleNamespace(id=ids, out=True)
+
     async def edit_message(self, entity, message_id, text, **kwargs):
         self.calls.append(kwargs)
 

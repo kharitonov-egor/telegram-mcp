@@ -706,6 +706,15 @@ async def set_contact_alias(
                     ),
                 }
             )
+        if is_chat_allowlist_enabled() and not is_chat_allowed(chat_id, entity):
+            err = check_chat_access(chat_id, entity)
+            return log_and_format_error(
+                "set_contact_alias",
+                ChatAccessDeniedError(err),
+                prefix=ErrorCategory.PRIVACY,
+                user_message=err,
+                chat_id=chat_id,
+            )
         marked_id = get_marked_id(entity)
         formatted = format_entity(entity)
 

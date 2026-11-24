@@ -1,5 +1,6 @@
 """Exercise poll voting through the registered tool and real Telethon TL objects."""
 
+import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -60,10 +61,13 @@ async def call_vote(**kwargs):
 @pytest.mark.parametrize("indices", [[1], [2, 0]])
 async def test_vote_sends_real_option_bytes(voting, indices):
     voting.poll.multiple_choice = len(indices) > 1
-    result = await call_vote(option_indices=indices, account="personal")
-    assert result == "Vote submitted for poll 42 in chat -123."
+    result = json.loads(await call_vote(option_indices=indices, account="personal"))
+    assert result["action"] == "voted"
+    assert result["submitted"] == (["Water"] if indices == [1] else ["Juice", "Tea"])
+    assert "quiz_correct" not in result
     voting.get_client.assert_called_once_with("personal")
-    voting.client.get_messages.assert_awaited_once_with(voting.entity, ids=42)
+    assert voting.client.get_messages.await_args_list[0].args == (voting.entity,)
+    assert voting.client.get_messages.await_args_list[0].kwargs == {"ids": 42}
     request = voting.client.call_args.args[0]
     assert isinstance(request, SendVoteRequest)
     assert request.peer == voting.entity
@@ -79,7 +83,6 @@ async def test_vote_sends_real_option_bytes(voting, indices):
     [
         ({"message_id": 0}, "positive integer"),
         ({"message_id": -1}, "positive integer"),
-        ({"option_indices": []}, "non-empty list"),
         ({"option_indices": [True]}, "list of integers"),
         ({"option_indices": [1.0]}, "list of integers"),
         ({"option_indices": [1, 1]}, "duplicates"),
@@ -148,10 +151,10 @@ async def test_resolved_chat_is_checked_before_reading(voting, monkeypatch):
 @pytest.mark.asyncio
 async def test_registered_tool_accepts_username_and_rejects_coercion(voting):
     tool = next(t for t in messages.mcp._tool_manager.list_tools() if t.name == "vote_poll")
-    assert not tool.annotations.readOnlyHint
-    assert tool.annotations.destructiveHint
+    assert tool.annotations.readOnlyHint is False
+    assert tool.annotations.destructiveHint is False
     result = await tool.run({"chat_id": "@example_chat", "message_id": 42, "option_indices": [1]})
-    assert "Vote submitted" in result
+    assert json.loads(result)["action"] == "voted"
     for invalid in [True, 1.0, "1"]:
         voting.client.reset_mock()
         with pytest.raises(ToolError):
@@ -163,3 +166,91 @@ def test_vote_exported_for_compatibility_entrypoint():
     from telegram_mcp.tools import vote_poll
 
     assert vote_poll is messages.vote_poll
+
+
+def refreshed(voting, counts, chosen, correct=(), **results):
+    """Make the post-vote re-read return a poll with Telegram's updated results."""
+    options = [answer.option for answer in voting.poll.answers]
+    after = types.Message(
+        id=42,
+        peer_id=types.PeerChat(123),
+        date=datetime.now(timezone.utc),
+        message="",
+        media=types.MessageMediaPoll(
+            voting.poll,
+            types.PollResults(
+                results=[
+                    types.PollAnswerVoters(
+                        option=o,
+                        voters=n,
+                        chosen=o in chosen or None,
+                        correct=o in correct or None,
+                    )
+                    for o, n in zip(options, counts)
+                ],
+                total_voters=sum(counts),
+                **results,
+            ),
+        ),
+    )
+    voting.client.get_messages.side_effect = [voting.message, after]
+
+
+@pytest.mark.asyncio
+async def test_vote_returns_now_visible_results(voting):
+    refreshed(voting, [2, 1, 0], chosen={b"\xff\x10"})
+
+    result = json.loads(await call_vote(option_indices=[1]))
+
+    poll = result["poll"]
+    assert poll["voted"] is True
+    assert poll["chosen_by_me"] == ["Water"]
+    assert [o["votes"] for o in poll["options"]] == [2, 1, 0]
+    assert poll["results_visible"] is True
+    assert "results_note" not in poll
+
+
+@pytest.mark.asyncio
+async def test_empty_selection_retracts_vote(voting):
+    refreshed(voting, [2, 0, 0], chosen=set())
+
+    result = json.loads(await call_vote(option_indices=[]))
+
+    request = voting.client.call_args.args[0]
+    assert isinstance(request, SendVoteRequest)
+    assert request.options == []
+    assert bytes(request)
+    assert result["action"] == "retracted"
+    assert result["submitted"] == []
+    assert result["poll"]["voted"] is False
+
+
+@pytest.mark.asyncio
+async def test_retract_on_closed_poll_never_sends(voting):
+    voting.poll.closed = True
+    assert "Poll is closed" in await call_vote(option_indices=[])
+    voting.client.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("picked, expected", [(1, True), (0, False)])
+async def test_quiz_vote_reports_correctness(voting, picked, expected):
+    voting.poll.quiz = True
+    option = voting.poll.answers[picked].option
+    refreshed(voting, [1, 1, 0], chosen={option}, correct={b"\xff\x10"}, solution="Water hydrates")
+
+    result = json.loads(await call_vote(option_indices=[picked]))
+
+    assert result["quiz_correct"] is expected
+    assert result["poll"]["correct_answers"] == ["Water"]
+    assert result["poll"]["solution"] == "Water hydrates"
+
+
+@pytest.mark.asyncio
+async def test_quiz_correctness_unknown_when_telegram_hides_it(voting):
+    voting.poll.quiz = True
+    refreshed(voting, [1, 0, 0], chosen={b"tea-id"})
+
+    result = json.loads(await call_vote(option_indices=[0]))
+
+    assert result["quiz_correct"] is None

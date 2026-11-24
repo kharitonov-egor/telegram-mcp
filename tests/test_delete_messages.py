@@ -28,7 +28,7 @@ class AccountServer(TelegramClient):
         super().__init__(StringSession(), 12345, "dummy_hash")
         self.server = {
             message_id: types.Message(
-                id=message_id, peer_id=types.PeerUser(user_id), date=NOW, message="hi"
+                id=message_id, peer_id=types.PeerUser(user_id), date=NOW, message="hi", out=True
             )
             for message_id, user_id in chat_of_message.items()
         }
@@ -83,7 +83,7 @@ async def test_delete_message_refuses_a_message_from_another_chat(account):
 async def test_delete_message_deletes_a_message_of_the_chat(account):
     result = await messages.delete_message(chat_id=101, message_id=4523)
 
-    assert result == "Message 4523 deleted."
+    assert result == "Message 4523 deleted for everyone."
     assert 4523 not in account.server
     assert set(account.server) == {4519, 4520, 4521, 4522}
 
@@ -106,7 +106,7 @@ async def test_delete_messages_bulk_deletes_messages_of_the_chat(account):
 
 
 @pytest.mark.asyncio
-async def test_delete_message_in_a_channel_skips_the_ownership_lookup(monkeypatch):
+async def test_delete_message_in_a_channel_checks_the_post_is_own(monkeypatch):
     channel = Channel(
         id=1555000000, title="Team", photo=ChatPhotoEmpty(), date=NOW, megagroup=True
     )
@@ -115,10 +115,10 @@ async def test_delete_message_in_a_channel_skips_the_ownership_lookup(monkeypatc
         def __init__(self):
             self.deleted = None
 
-        async def get_messages(self, *args, **kwargs):
-            raise AssertionError("channel deletes are already scoped by Telegram")
+        async def get_messages(self, entity, ids):
+            return SimpleNamespace(id=ids, out=True)
 
-        async def delete_messages(self, entity, message_ids):
+        async def delete_messages(self, entity, message_ids, revoke=True):
             self.deleted = (entity, message_ids)
 
     async def fake_resolve(chat_id, cl=None):
@@ -135,7 +135,7 @@ async def test_delete_message_in_a_channel_skips_the_ownership_lookup(monkeypatc
 
     result = await messages.delete_message(chat_id=-1001555000000, message_id=7)
 
-    assert result == "Message 7 deleted."
+    assert result == "Message 7 deleted for everyone."
     assert client.deleted == (channel, 7)
 
 

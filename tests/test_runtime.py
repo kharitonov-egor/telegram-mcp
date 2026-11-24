@@ -52,10 +52,10 @@ def test_shared_server_uses_stateless_http_transport():
     assert runtime.mcp.settings.stateless_http is True
 
 
-def test_get_exposed_tools_mode_defaults_to_all(monkeypatch):
+def test_get_exposed_tools_mode_defaults_to_read_only(monkeypatch):
     monkeypatch.delenv("TELEGRAM_EXPOSED_TOOLS", raising=False)
 
-    assert runtime._get_exposed_tools_mode() == "all"
+    assert runtime._get_exposed_tools_mode() == "read-only"
 
 
 def test_apply_exposed_tools_all_keeps_tools():
@@ -195,7 +195,7 @@ def test_parse_exposed_tools_mode_reads_env(monkeypatch):
     assert runtime._parse_exposed_tools_mode() == ("read-only", ["send_tool"], ["read_tool"])
 
     monkeypatch.delenv("TELEGRAM_EXPOSED_TOOLS")
-    assert runtime._parse_exposed_tools_mode() == ("all", [], [])
+    assert runtime._parse_exposed_tools_mode() == ("read-only", [], [])
 
 
 @pytest.mark.parametrize(

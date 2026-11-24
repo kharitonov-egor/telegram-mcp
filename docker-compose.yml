@@ -11,7 +11,7 @@ services:
     env_file:
       - .env
     # Serve streamable HTTP so one long-lived container is shared by all MCP
-    # clients (see the Transports section in README.md). MCP_HOST must be
+    # clients (see the Transports section in docs/reference.md). MCP_HOST must be
     # 0.0.0.0 inside the container for the published port to work.
     environment:
       MCP_TRANSPORT: http

@@ -335,11 +335,13 @@ def _parse_exposed_tools_mode(value: Optional[str] = None) -> _ExposedToolsMode:
     ``read-only`` keeps only tools annotated with ``readOnlyHint=True``.
     ``read-only+send_message,reply_to_message`` keeps those plus the named
     write tools. A trailing ``-tool,tool`` list hides named tools from either
-    base, e.g. ``all-delete_chat_history``. The default is ``all`` for
-    backward compatibility. Tool names are checked against the registry
-    later, in ``_apply_exposed_tools_mode``.
+    base, e.g. ``all-delete_chat_history``. The default is ``read-only``, so
+    an unconfigured server cannot send, edit or delete anything. Tool names
+    are checked against the registry later, in ``_apply_exposed_tools_mode``.
     """
-    raw_value = os.getenv("TELEGRAM_EXPOSED_TOOLS", "all") if value is None else value
+    if value is None:
+        value = os.getenv("TELEGRAM_EXPOSED_TOOLS", "read-only")
+    raw_value = value
     base_mode, allowlist, exclusions = _split_exposed_tools_value(raw_value.strip().lower())
     invalid = f"Invalid TELEGRAM_EXPOSED_TOOLS '{raw_value}'."
     if base_mode is None:

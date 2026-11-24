@@ -706,3 +706,41 @@ async def test_get_folder_hides_unallowed_chats(monkeypatch):
     assert [c["id"] for c in res["included_chats"]] == [101]
     assert res["pinned_chats"] == []
     assert res["excluded_chats"] == []
+
+
+@pytest.mark.asyncio
+async def test_set_contact_alias_refuses_unallowed_contact(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_IDS", "101")
+    monkeypatch.setattr(contacts, "get_client", lambda account=None: object())
+
+    async def resolve(target, cl):
+        return User(id=202, first_name="Alice", access_hash=1)
+
+    def must_not_store(fn):
+        raise AssertionError("an alias for a chat outside the allowlist must not be saved")
+
+    monkeypatch.setattr(contacts, "resolve_entity", resolve)
+    monkeypatch.setattr(contacts, "update_aliases", must_not_store)
+
+    res = await contacts.set_contact_alias(alias="alice from work", chat_id="202")
+
+    assert "restricted by privacy policy" in res
+    assert "202" in res
+
+
+@pytest.mark.asyncio
+async def test_set_contact_alias_saves_allowed_contact(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_IDS", "202")
+    monkeypatch.setattr(contacts, "get_client", lambda account=None: object())
+
+    async def resolve(target, cl):
+        return User(id=202, first_name="Alice", access_hash=1)
+
+    stored = {}
+    monkeypatch.setattr(contacts, "resolve_entity", resolve)
+    monkeypatch.setattr(contacts, "update_aliases", lambda fn: fn(stored))
+
+    res = await contacts.set_contact_alias(alias="alice from work", chat_id="202")
+
+    assert json.loads(res)["results"]["saved"] is True
+    assert stored["alice from work"]["id"] == 202
