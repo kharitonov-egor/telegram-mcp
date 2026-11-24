@@ -1,20 +1,20 @@
 # telegram-mcp
 
-An MCP server that lets Claude, Codex and other MCP clients read and act on your Telegram account, read-only unless you opt in.
+An MCP server that lets Claude, Codex and other MCP clients read and act on your Telegram account. It is read-only unless you opt in.
 
-This is a fork of [chigwell/telegram-mcp](https://github.com/chigwell/telegram-mcp) with poll, media search and transcription tools, plus tighter access controls.
+This is a fork of [chigwell/telegram-mcp](https://github.com/chigwell/telegram-mcp) that tracks upstream `main`. Upstream provides the 80+ tools for chats, messages, contacts, folders, polls, reactions, scheduled messages and voice transcription. The fork adds the pieces listed below. Upstream's full documentation is in [docs/reference.md](docs/reference.md).
 
 ![Tools exposed by the default read-only preset plus a few opt-in writes](docs/screenshot-tools.png)
 
-## Features
+## What this fork adds
 
-- Read chats, history, contacts, folders, topics, pinned and scheduled messages.
-- Polls. `get_poll` returns options, counts and your vote. `vote_poll` votes or retracts and returns the refreshed poll.
-- Voice and video-note transcription through Groq Whisper, a local faster-whisper model, or any OpenAI-compatible endpoint. Transcripts are cached in SQLite.
-- `search_media` finds text inside voice notes (transcribed) and images (OCR with Tesseract).
-- Reactions, scheduled messages, forwarding.
-- `edit_message` and `delete_message` only touch messages this account sent.
-- Exposure presets. `read-only` is the default. `read-only+send_message,vote_poll` adds just the write tools you name.
+- `get_poll` returns a poll's question, options, vote counts, this account's vote and, for public polls, who voted. It never votes. `get_messages` shows a poll as a one-line summary instead of `[empty]`, and `get_media_info` returns the same summary instead of the raw TL object.
+- `search_media` finds text inside a chat's recent voice notes, video notes and images. Recordings go through the same engine and cache as `transcribe_voice`; images go through Tesseract OCR. Each call downloads at most 30 uncached files and skips anything above 20 MB.
+- `edit_message` and `delete_message` refuse messages this account did not send.
+- `TELEGRAM_EXPOSED_TOOLS` defaults to `read-only` instead of `all`. Write tools stay unregistered until you name them, for example `read-only+send_message,vote_poll`.
+- Optional bearer auth for HTTP and SSE through `MCP_AUTH_TOKEN`, with a temporary lockout after repeated bad tokens. Unset, the server behaves like upstream.
+- `set_contact_alias` returns the same PRIVACY error as `get_messages` when the target is outside `TELEGRAM_ALLOWED_CHAT_IDS` or inside `TELEGRAM_BLOCKED_CHAT_IDS`.
+- `.gitignore` also covers `.env.*`, `data/`, transcript and OCR caches, and SQLite files.
 
 ![get_poll on a demo chat](docs/screenshot-get-poll.png)
 
@@ -44,7 +44,7 @@ uv run main.py                       # stdio; or MCP_TRANSPORT=http for a shared
 
 Point an HTTP client at `http://127.0.0.1:8765/mcp`, for example `claude mcp add --transport http telegram http://127.0.0.1:8765/mcp`.
 
-Every other option (multiple accounts, proxies, Docker, file roots, the event feed) is in [docs/reference.md](docs/reference.md).
+Multiple accounts, proxies, Docker, file roots, the event feed, the chat blocklist and forum topic limits are covered in [docs/reference.md](docs/reference.md).
 
 ## Security
 
@@ -54,7 +54,7 @@ A session string is full access to the Telegram account. Keep `.env` and `*.sess
 - With `TELEGRAM_ALLOWED_CHAT_IDS` set, every tool that takes a chat refuses chats outside the list, and listing tools hide them. Unset means no restriction.
 - `edit_message` and `delete_message` refuse messages sent by anyone else.
 - HTTP and SSE bind to `127.0.0.1` by default. The server prints a warning if you bind elsewhere without `MCP_AUTH_TOKEN`.
-- With `MCP_AUTH_TOKEN` set, requests need the bearer token, compared in constant time. After `MCP_AUTH_MAX_FAILURES` bad attempts (default 10) within `MCP_AUTH_LOCKOUT_SECONDS` (default 60) a client address gets HTTP 429 for that long.
+- With `MCP_AUTH_TOKEN` set, requests need the bearer token, compared in constant time. After `MCP_AUTH_MAX_FAILURES` bad attempts (default 10) within `MCP_AUTH_LOCKOUT_SECONDS` (default 60), a client address gets HTTP 429 for that long.
 
 None of this limits what the session itself can do. Anyone who reads your `.env` can skip the server entirely.
 

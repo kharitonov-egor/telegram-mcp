@@ -19,6 +19,8 @@ class OwnClient:
         self.deleted = []
 
     async def get_messages(self, entity, ids):
+        if isinstance(ids, list):
+            return [self.message for _ in ids]
         return self.message
 
     async def get_me(self, input_peer=False):
@@ -28,8 +30,8 @@ class OwnClient:
     async def edit_message(self, entity, message_id, text, **kwargs):
         self.edited.append((message_id, text))
 
-    async def delete_messages(self, entity, message_ids, revoke=True):
-        self.deleted.append((message_ids, revoke))
+    async def delete_messages(self, entity, message_ids):
+        self.deleted.append(message_ids)
 
 
 @pytest.fixture
@@ -107,23 +109,23 @@ async def test_delete_refuses_someone_elses_message(install):
 
 
 @pytest.mark.asyncio
-async def test_delete_own_message_revokes_for_everyone_by_default(install):
+async def test_delete_own_message(install):
     client = install(message(out=True))
 
     result = await messages.delete_message(chat_id=CHAT, message_id=42)
 
-    assert result == "Message 42 deleted for everyone."
-    assert client.deleted == [(42, True)]
+    assert result == "Message 42 deleted."
+    assert client.deleted == [42]
 
 
 @pytest.mark.asyncio
-async def test_delete_own_message_only_for_me(install):
-    client = install(message(out=True))
+async def test_delete_refuses_message_outside_chat(install):
+    client = install(None)
 
-    result = await messages.delete_message(chat_id=CHAT, message_id=42, revoke=False)
+    result = await messages.delete_message(chat_id=CHAT, message_id=42)
 
-    assert result == "Message 42 deleted for you."
-    assert client.deleted == [(42, False)]
+    assert result == f"Message 42 is not in chat {CHAT}; nothing was deleted."
+    assert client.deleted == []
 
 
 def test_write_annotations():
@@ -131,5 +133,3 @@ def test_write_annotations():
     assert tools["delete_message"].annotations.destructiveHint is True
     assert not tools["delete_message"].annotations.readOnlyHint
     assert not tools["edit_message"].annotations.readOnlyHint
-    params = tools["delete_message"].parameters["properties"]
-    assert params["revoke"]["default"] is True

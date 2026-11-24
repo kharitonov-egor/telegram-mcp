@@ -83,7 +83,7 @@ async def test_delete_message_refuses_a_message_from_another_chat(account):
 async def test_delete_message_deletes_a_message_of_the_chat(account):
     result = await messages.delete_message(chat_id=101, message_id=4523)
 
-    assert result == "Message 4523 deleted for everyone."
+    assert result == "Message 4523 deleted."
     assert 4523 not in account.server
     assert set(account.server) == {4519, 4520, 4521, 4522}
 
@@ -118,7 +118,7 @@ async def test_delete_message_in_a_channel_checks_the_post_is_own(monkeypatch):
         async def get_messages(self, entity, ids):
             return SimpleNamespace(id=ids, out=True)
 
-        async def delete_messages(self, entity, message_ids, revoke=True):
+        async def delete_messages(self, entity, message_ids):
             self.deleted = (entity, message_ids)
 
     async def fake_resolve(chat_id, cl=None):
@@ -135,7 +135,7 @@ async def test_delete_message_in_a_channel_checks_the_post_is_own(monkeypatch):
 
     result = await messages.delete_message(chat_id=-1001555000000, message_id=7)
 
-    assert result == "Message 7 deleted for everyone."
+    assert result == "Message 7 deleted."
     assert client.deleted == (channel, 7)
 
 

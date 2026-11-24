@@ -13,7 +13,7 @@ async def get_me(account: Optional[str] = None) -> str:
         cl = get_client(account)
         await ensure_connected(cl)
         me = await cl.get_me()
-        return json.dumps(format_entity(me), indent=2)
+        return json.dumps(format_entity(me), indent=2, ensure_ascii=False)
     except Exception as e:
         return log_and_format_error("get_me", e)
 
@@ -78,28 +78,61 @@ async def set_profile_photo(
         return log_and_format_error("set_profile_photo", e, file_path=file_path)
 
 
+_PHOTO_PAGE_SIZE = 100
+
+
 @mcp.tool(
     annotations=ToolAnnotations(
         title="Delete Profile Photo", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
 @with_account(readonly=False)
-async def delete_profile_photo(account: Optional[str] = None) -> str:
+async def delete_profile_photo(
+    photo_id: Optional[Union[int, str]] = None, account: Optional[str] = None
+) -> str:
     """
-    Delete your current profile photo.
+    Delete one of your profile photos.
+
+    Args:
+        photo_id: Avatar id from list_photos("me") to delete that photo. Pass it as a
+            string: avatar ids go past 2^53, so a JSON number can arrive rounded and
+            point at the wrong photo. Omit it to delete the current profile photo.
     """
+    wanted = None
+    if photo_id is not None:
+        try:
+            wanted = int(str(photo_id).strip().strip("\"'"))
+        except ValueError:
+            return f"Invalid photo_id {photo_id!r}: expected the numeric id from list_photos."
     try:
         cl = get_client(account)
         await ensure_connected(cl)
-        photos = await cl(
-            functions.photos.GetUserPhotosRequest(user_id="me", offset=0, max_id=0, limit=1)
-        )
-        if not photos.photos:
-            return "No profile photo to delete."
-        await cl(functions.photos.DeletePhotosRequest(id=[photos.photos[0]]))
-        return "Profile photo deleted."
+        if wanted is None:
+            photos = await cl(
+                functions.photos.GetUserPhotosRequest(user_id="me", offset=0, max_id=0, limit=1)
+            )
+            if not photos.photos:
+                return "No profile photo to delete."
+            await cl(functions.photos.DeletePhotosRequest(id=[photos.photos[0]]))
+            return "Profile photo deleted."
+
+        offset = 0
+        while True:
+            page = await cl(
+                functions.photos.GetUserPhotosRequest(
+                    user_id="me", offset=offset, max_id=0, limit=_PHOTO_PAGE_SIZE
+                )
+            )
+            match = next((p for p in page.photos if p.id == wanted), None)
+            if match is not None:
+                break
+            if len(page.photos) < _PHOTO_PAGE_SIZE:
+                return f"No profile photo with id {wanted}."
+            offset += len(page.photos)
+        await cl(functions.photos.DeletePhotosRequest(id=[match]))
+        return f"Profile photo {wanted} deleted."
     except Exception as e:
-        return log_and_format_error("delete_profile_photo", e)
+        return log_and_format_error("delete_profile_photo", e, photo_id=photo_id)
 
 
 @mcp.tool(
@@ -186,6 +219,7 @@ def _merged_privacy_rules(current, allow, disallow):
 )
 @with_account(readonly=False)
 @validate_id("allow_users", "disallow_users")
+@flood_category("admin_action")
 async def set_privacy_settings(
     key: str,
     allow_users: Optional[List[Union[int, str]]] = None,
@@ -443,7 +477,7 @@ async def get_bot_info(bot_username: str, account: Optional[str] = None) -> str:
             info["bot_info"]["about"] = sanitize_user_content(
                 result.full_user.about, max_length=1024
             )
-        return json.dumps(info, indent=2)
+        return json.dumps(info, indent=2, ensure_ascii=False)
     except Exception as e:
         return log_and_format_error("get_bot_info", e, bot_username=bot_username)
 
@@ -454,6 +488,7 @@ async def get_bot_info(bot_username: str, account: Optional[str] = None) -> str:
     )
 )
 @with_account(readonly=False)
+@flood_category("admin_action")
 async def set_bot_commands(
     bot_username: str, commands: list, account: Optional[str] = None
 ) -> str:
@@ -521,7 +556,7 @@ async def get_user_photos(
         photos = await cl(
             functions.photos.GetUserPhotosRequest(user_id=user, offset=0, max_id=0, limit=limit)
         )
-        return json.dumps([p.id for p in photos.photos], indent=2)
+        return json.dumps([p.id for p in photos.photos], indent=2, ensure_ascii=False)
     except Exception as e:
         return log_and_format_error("get_user_photos", e, user_id=user_id, limit=limit)
 

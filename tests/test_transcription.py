@@ -3,8 +3,10 @@
 import asyncio
 import os
 import stat
+from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from telegram_mcp import transcription
@@ -1058,3 +1060,171 @@ async def test_whisper_inference_failure_is_error(monkeypatch, fake_whisper):
 
     assert result["status"] == "error"
     assert "bad audio" in result["error"]
+
+
+def test_default_cache_falls_back_to_a_user_cache_when_cwd_is_unusable(tmp_path, monkeypatch):
+    # A server started by an MCP client often has a read-only working directory. A regular
+    # file named "data" makes the relative default unusable even for root.
+    workdir = tmp_path / "cwd"
+    workdir.mkdir()
+    (workdir / "data").write_text("not a directory")
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.chdir(workdir)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # Path.home() on Windows
+    monkeypatch.delenv("TELEGRAM_TRANSCRIPT_CACHE_DIR", raising=False)
+
+    path = transcription.cache_dir()
+
+    assert path == home / ".cache" / "telegram-mcp" / "transcripts"
+    assert path.is_dir()
+
+
+def test_default_cache_stays_in_the_working_directory_when_it_is_writable(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("TELEGRAM_TRANSCRIPT_CACHE_DIR", raising=False)
+
+    assert transcription.cache_dir() == Path("data/transcripts")
+    assert (tmp_path / "data" / "transcripts").is_dir()
+
+
+def test_explicit_cache_dir_that_cannot_be_created_still_fails(tmp_path, monkeypatch):
+    blocker = tmp_path / "blocker"
+    blocker.write_text("file")
+    monkeypatch.setenv("TELEGRAM_TRANSCRIPT_CACHE_DIR", str(blocker / "cache"))
+
+    with pytest.raises(OSError):
+        transcription.cache_dir()
+
+
+@pytest.mark.asyncio
+async def test_whisper_lock_is_held_until_the_worker_finishes(monkeypatch):
+    import threading
+
+    monkeypatch.setattr(transcription, "_WHISPER_SEMAPHORE", None)
+    release = threading.Event()
+
+    def _slow():
+        release.wait(5)
+        return "done"
+
+    task = asyncio.ensure_future(transcription._whisper_in_thread(_slow))
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert transcription._WHISPER_SEMAPHORE.locked(), "lock freed while inference still runs"
+    release.set()
+    for _ in range(100):
+        if not transcription._WHISPER_SEMAPHORE.locked():
+            break
+        await asyncio.sleep(0.01)
+    assert not transcription._WHISPER_SEMAPHORE.locked()
+
+
+# --- transcribe_audio: a sound track with segment timestamps
+
+
+class _Response:
+    def __init__(self, status, payload):
+        self.status_code, self._payload = status, payload
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            request = httpx.Request("POST", "http://asr/v1/audio/transcriptions")
+            raise httpx.HTTPStatusError(
+                "bad", request=request, response=httpx.Response(self.status_code)
+            )
+
+    def json(self):
+        return self._payload
+
+
+def _fake_http(monkeypatch, replies):
+    sent = []
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def post(self, url, headers=None, data=None, files=None):
+            sent.append(dict(data))
+            return replies.pop(0)
+
+    monkeypatch.setattr(transcription.httpx, "AsyncClient", _Client)
+    return sent
+
+
+@pytest.fixture
+def openai_engine(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_TRANSCRIBE_OPENAI_URL", "http://asr/v1")
+    monkeypatch.delenv("TELEGRAM_TRANSCRIBE_LANGUAGE", raising=False)
+
+
+@pytest.mark.asyncio
+async def test_transcribe_audio_returns_segments(monkeypatch, openai_engine):
+    sent = _fake_http(
+        monkeypatch,
+        [
+            _Response(
+                200,
+                {
+                    "text": "hello two",
+                    "segments": [
+                        {"start": 0.0, "end": 1.0, "text": " hello "},
+                        {"start": 1.0, "end": 1.5, "text": "  "},
+                        {"start": 2.0, "end": 3.0, "text": "two"},
+                    ],
+                },
+            )
+        ],
+    )
+    result = await transcription.transcribe_audio(b"fLaC...", "openai")
+    assert result["status"] == "ok"
+    assert result["segments"] == [
+        {"start": 0.0, "end": 1.0, "text": "hello"},
+        {"start": 2.0, "end": 3.0, "text": "two"},
+    ]
+    assert sent[0]["response_format"] == "verbose_json"
+
+
+@pytest.mark.asyncio
+async def test_transcribe_audio_falls_back_when_verbose_json_is_refused(
+    monkeypatch, openai_engine
+):
+    sent = _fake_http(monkeypatch, [_Response(400, {}), _Response(200, {"text": "plain"})])
+    result = await transcription.transcribe_audio(b"fLaC...", "openai")
+    assert (result["status"], result["text"], result["segments"]) == ("ok", "plain", [])
+    assert [form["response_format"] for form in sent] == ["verbose_json", "json"]
+
+
+@pytest.mark.asyncio
+async def test_transcribe_audio_refuses_telegram_and_oversized(monkeypatch, openai_engine):
+    refused = await transcription.transcribe_audio(b"x", "telegram")
+    assert refused["status"] == "error" and "video notes" in refused["error"]
+    monkeypatch.setenv("TELEGRAM_TRANSCRIBE_OPENAI_MAX_MB", "0.000001")
+    too_big = await transcription.transcribe_audio(b"x" * 100, "openai")
+    assert too_big["status"] != "ok"
+
+
+@pytest.mark.asyncio
+async def test_voice_transcription_still_uses_the_plain_format(monkeypatch, openai_engine):
+    sent = _fake_http(monkeypatch, [_Response(200, {"text": "voice text"})])
+
+    class _Msg:
+        file = SimpleNamespace(ext=".oga", mime_type="audio/ogg", size=10)
+
+    async def _download(msg, file=None):
+        return b"OggS"
+
+    client = SimpleNamespace(download_media=_download)
+    result = await transcription.transcribe(client, None, _Msg(), "openai")
+    assert result == {"status": "ok", "text": "voice text", "lang": None}
+    assert sent[0]["response_format"] == "json"

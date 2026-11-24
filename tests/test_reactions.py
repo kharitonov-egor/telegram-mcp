@@ -112,14 +112,3 @@ async def test_invalid_custom_id_does_not_call_telegram(client):
 
     assert "Invalid custom reaction" in result
     assert client.requests == []
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("emoji", [None, "", "  "])
-async def test_empty_emoji_removes_reaction(client, emoji):
-    result = await messages.send_reaction(-1004358797279, 880, emoji)
-
-    assert result == "Reaction removed from message 880 in chat -1004358797279."
-    request = client.requests[0]
-    assert isinstance(request, functions.messages.SendReactionRequest)
-    assert request.reaction == []

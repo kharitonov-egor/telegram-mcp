@@ -92,7 +92,7 @@ class BearerAuthMiddleware:
     async def _reject(
         self, send: Send, status: int, message: str, headers: list[tuple[bytes, bytes]]
     ) -> None:
-        body = json.dumps({"error": message}).encode()
+        body = json.dumps({"error": message}, ensure_ascii=False).encode()
         await send(
             {
                 "type": "http.response.start",
